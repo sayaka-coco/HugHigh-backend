@@ -719,14 +719,20 @@ def get_students(
 
 
 # OpenAI Evaluation for "謙虚である力"
-from openai import OpenAI
 from typing import Optional
-import httpx
+
+# Optional OpenAI import - works without it installed
+try:
+    from openai import OpenAI
+    import httpx
+    _http_client = httpx.Client(proxy=None)
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OpenAI = None
+    _http_client = None
+    OPENAI_AVAILABLE = False
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-
-# Create httpx client without proxy to avoid compatibility issues
-_http_client = httpx.Client(proxy=None)
 
 class GratitudeTargetInput(BaseModel):
     student_name: str
@@ -749,8 +755,8 @@ def evaluate_content_with_ai(content: str, content_type: str, max_score: int) ->
     if not content or not content.strip():
         return 0
 
-    if not OPENAI_API_KEY:
-        # Fallback if no API key - give partial score
+    if not OPENAI_AVAILABLE or not OPENAI_API_KEY:
+        # Fallback if OpenAI not available or no API key - give partial score
         return max_score // 2
 
     try:
@@ -879,3 +885,107 @@ def evaluate_humility(
             "weakness_text": request.weakness or ""
         }
     )
+
+
+# Skill Advice Generation API
+class SkillAdviceRequest(BaseModel):
+    skills: dict  # {"戦略的計画力": 75, "課題設定・構想力": 100, ...}
+
+
+class SkillAdviceResponse(BaseModel):
+    advice: dict  # {"戦略的計画力": "アドバイス文...", ...}
+
+
+@app.post("/generate-skill-advice", response_model=SkillAdviceResponse)
+def generate_skill_advice(
+    request: SkillAdviceRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate personalized advice for each skill based on the score using AI.
+    """
+    if not OPENAI_AVAILABLE or not OPENAI_API_KEY:
+        # Fallback to static advice if OpenAI not available or no API key
+        return SkillAdviceResponse(advice={
+            skill: get_fallback_advice(skill, score)
+            for skill, score in request.skills.items()
+        })
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY, http_client=_http_client)
+
+        # Build prompt with all skills
+        skills_text = "\n".join([f"- {skill}: {score}点" for skill, score in request.skills.items()])
+
+        prompt = f"""あなたは高校生の非認知能力を育成する教育コーチです。
+以下の7つの力のスコア（100点満点）に対して、それぞれ個別にパーソナライズされたアドバイスを生成してください。
+
+【生徒のスコア】
+{skills_text}
+
+【各スキルの説明】
+- 戦略的計画力: 目標に向けて計画を立て、優先順位をつけて行動する力
+- 課題設定・構想力: 問題を発見し、解決すべき課題を明確にする力
+- 巻き込む力: 周囲の人を巻き込み、チームで成果を出す力
+- 対話する力: 相手の話を傾聴し、自分の考えを伝える力
+- 実行する力: 計画を実際の行動に移し、粘り強く取り組む力
+- 完遂する力: 困難があっても最後までやり遂げる力
+- 謙虚である力: 自分の弱さを認め、他者から学ぶ姿勢
+
+【アドバイスのルール】
+1. 各スキルに対して1-2文の短いアドバイスを書く
+2. スコアが高い場合（70点以上）は褒めつつ次のステップを提案
+3. スコアが中程度（40-69点）は具体的な改善ポイントを提案
+4. スコアが低い場合（40点未満）は励ましと小さな一歩を提案
+5. 同じような文言の繰り返しを避け、各スキルで異なる表現を使う
+6. 高校生に語りかけるような親しみやすい口調で
+
+【出力形式】
+JSON形式で出力してください：
+{{"戦略的計画力": "アドバイス...", "課題設定・構想力": "アドバイス...", ...}}
+"""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "あなたは高校生を支援する教育コーチです。JSON形式で回答してください。"},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1000,
+            temperature=0.7
+        )
+
+        result = response.choices[0].message.content.strip()
+
+        # Parse JSON from response
+        import json
+        import re
+
+        # Try to extract JSON from the response
+        json_match = re.search(r'\{[^{}]*\}', result, re.DOTALL)
+        if json_match:
+            advice_dict = json.loads(json_match.group())
+            return SkillAdviceResponse(advice=advice_dict)
+
+        # If JSON parsing fails, return fallback
+        return SkillAdviceResponse(advice={
+            skill: get_fallback_advice(skill, score)
+            for skill, score in request.skills.items()
+        })
+
+    except Exception as e:
+        print(f"OpenAI API error in generate_skill_advice: {e}")
+        return SkillAdviceResponse(advice={
+            skill: get_fallback_advice(skill, score)
+            for skill, score in request.skills.items()
+        })
+
+
+def get_fallback_advice(skill: str, score: int) -> str:
+    """Fallback advice when OpenAI is not available."""
+    if score >= 70:
+        return f"{skill}が順調に伸びています！この調子で続けていきましょう。"
+    elif score >= 40:
+        return f"{skill}を少しずつ伸ばしていきましょう。意識して取り組むことが大切です。"
+    else:
+        return f"{skill}はこれから伸ばせる分野です。小さな一歩から始めてみましょう。"
