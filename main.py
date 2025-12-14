@@ -13,7 +13,7 @@ from models import User, UserGoogleAccount, AuditLog
 from schemas import (
     LoginRequest, LoginResponse, UserResponse,
     GoogleLoginRequest, Token, UserCreateRequest, UserCreateGoogleRequest,
-    UserUpdateRequest
+    UserUpdateRequest, ProfileUpdateRequest
 )
 from auth import (
     verify_password, create_access_token, get_current_user,
@@ -279,7 +279,53 @@ def get_current_user_info(current_user: User = Depends(get_current_user)):
         class_name=current_user.class_name,
         role=current_user.role,
         is_active=current_user.is_active,
-        created_at=current_user.created_at
+        created_at=current_user.created_at,
+        profile_image=current_user.profile_image,
+        hobbies=current_user.hobbies,
+        current_focus=current_user.current_focus
+    )
+
+
+@app.put("/profile", response_model=UserResponse)
+def update_profile(
+    profile_data: ProfileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update user's own profile information.
+
+    - Updates profile image, hobbies, and current focus areas
+    - Any user can update their own profile
+    """
+    # Update profile fields
+    if profile_data.profile_image is not None:
+        current_user.profile_image = profile_data.profile_image
+    if profile_data.hobbies is not None:
+        # Validate max 50 characters
+        if len(profile_data.hobbies) > 50:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="趣味・特技は50文字以内で入力してください"
+            )
+        current_user.hobbies = profile_data.hobbies
+    if profile_data.current_focus is not None:
+        current_user.current_focus = profile_data.current_focus
+
+    db.commit()
+    db.refresh(current_user)
+
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        name=current_user.name,
+        class_name=current_user.class_name,
+        role=current_user.role,
+        is_active=current_user.is_active,
+        created_at=current_user.created_at,
+        profile_image=current_user.profile_image,
+        hobbies=current_user.hobbies,
+        current_focus=current_user.current_focus
     )
 
 
@@ -631,3 +677,205 @@ def delete_user(
 def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+# Student Schema
+from pydantic import BaseModel
+
+class StudentResponse(BaseModel):
+    id: str
+    name: str
+    email: str
+    class_name: str | None = None
+
+
+@app.get("/students", response_model=list[StudentResponse])
+def get_students(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all students for team member selection.
+
+    - Returns all active students
+    - Excludes the current user from the list
+    """
+    # Get all students (role=0), excluding current user
+    students = db.query(User).filter(
+        User.role == 0,  # Students only
+        User.id != current_user.id,
+        User.is_active == True
+    ).all()
+
+    return [
+        StudentResponse(
+            id=user.id,
+            name=user.name or user.email,
+            email=user.email,
+            class_name=user.class_name
+        )
+        for user in students
+    ]
+
+
+# OpenAI Evaluation for "謙虚である力"
+from openai import OpenAI
+from typing import Optional
+import httpx
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+# Create httpx client without proxy to avoid compatibility issues
+_http_client = httpx.Client(proxy=None)
+
+class GratitudeTargetInput(BaseModel):
+    student_name: str
+    message: str
+
+class HumilityEvaluationRequest(BaseModel):
+    gratitude_targets: list[GratitudeTargetInput] = []
+    weakness: Optional[str] = None
+
+class HumilityEvaluationResponse(BaseModel):
+    total_score: int
+    gratitude_count_score: int
+    gratitude_content_score: int
+    weakness_score: int
+    details: dict
+
+
+def evaluate_content_with_ai(content: str, content_type: str, max_score: int) -> int:
+    """Use OpenAI to evaluate the specificity/quality of content."""
+    if not content or not content.strip():
+        return 0
+
+    if not OPENAI_API_KEY:
+        # Fallback if no API key - give partial score
+        return max_score // 2
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY, http_client=_http_client)
+
+        if content_type == "gratitude":
+            prompt = f"""以下の感謝メッセージの具体性を評価してください。
+評価基準:
+- 具体的なエピソードや行動が書かれているか
+- 感謝の理由が明確か
+- 相手への気持ちが伝わる内容か
+
+感謝メッセージ:
+{content}
+
+0から{max_score}点で評価し、数値のみを返してください。
+- 0点: 空欄または意味のない内容
+- 1-{max_score//3}点: 抽象的で具体性がない
+- {max_score//3+1}-{max_score*2//3}点: ある程度具体的
+- {max_score*2//3+1}-{max_score}点: 非常に具体的で心のこもった内容
+
+数値のみ回答:"""
+        else:  # weakness
+            prompt = f"""以下の「自分の弱み」の記述の具体性を評価してください。
+評価基準:
+- 具体的な弱点が明確に書かれているか
+- 改善の意識が見られるか
+- 自己認識の深さが感じられるか
+
+弱みの記述:
+{content}
+
+0から{max_score}点で評価し、数値のみを返してください。
+- 0点: 空欄または意味のない内容
+- 1-{max_score//3}点: 抽象的で具体性がない
+- {max_score//3+1}-{max_score*2//3}点: ある程度具体的
+- {max_score*2//3+1}-{max_score}点: 非常に具体的で自己分析ができている
+
+数値のみ回答:"""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "あなたは教育評価の専門家です。指示に従って評価点数のみを返してください。"},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=10,
+            temperature=0.3
+        )
+
+        result = response.choices[0].message.content.strip()
+        # Extract number from response
+        import re
+        numbers = re.findall(r'\d+', result)
+        if numbers:
+            score = int(numbers[0])
+            return min(score, max_score)  # Ensure it doesn't exceed max
+        return max_score // 2  # Fallback
+
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        return max_score // 2  # Fallback score
+
+
+@app.post("/evaluate-humility", response_model=HumilityEvaluationResponse)
+def evaluate_humility(
+    request: HumilityEvaluationRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Evaluate "謙虚である力" (Humility) score based on:
+    - Gratitude targets from questionnaire (70%):
+      - Count: 0=0pts, 1=5pts, 2=10pts, 3+=15pts
+      - Content: Up to 55 points for specificity
+    - Weakness description (30%): Up to 30 points for specificity
+
+    Total: 100 points
+    """
+
+    # 1. Calculate gratitude count score (15 points max)
+    gratitude_count = len(request.gratitude_targets)
+    if gratitude_count == 0:
+        gratitude_count_score = 0
+    elif gratitude_count == 1:
+        gratitude_count_score = 5
+    elif gratitude_count == 2:
+        gratitude_count_score = 10
+    else:  # 3 or more
+        gratitude_count_score = 15
+
+    # 2. Calculate gratitude content score (55 points max)
+    gratitude_content_score = 0
+    if gratitude_count > 0:
+        # Distribute 55 points across all messages
+        points_per_message = 55 // max(gratitude_count, 1)
+        for target in request.gratitude_targets:
+            message_score = evaluate_content_with_ai(
+                target.message,
+                "gratitude",
+                points_per_message
+            )
+            gratitude_content_score += message_score
+        # Cap at 55
+        gratitude_content_score = min(gratitude_content_score, 55)
+
+    # 3. Calculate weakness score (30 points max)
+    weakness_score = 0
+    if request.weakness and request.weakness.strip():
+        weakness_score = evaluate_content_with_ai(
+            request.weakness,
+            "weakness",
+            30
+        )
+
+    # Total score
+    total_score = gratitude_count_score + gratitude_content_score + weakness_score
+
+    return HumilityEvaluationResponse(
+        total_score=total_score,
+        gratitude_count_score=gratitude_count_score,
+        gratitude_content_score=gratitude_content_score,
+        weakness_score=weakness_score,
+        details={
+            "gratitude_count": gratitude_count,
+            "gratitude_messages": [t.message for t in request.gratitude_targets],
+            "weakness_text": request.weakness or ""
+        }
+    )

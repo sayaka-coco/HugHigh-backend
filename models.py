@@ -17,6 +17,11 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
+    # Profile fields
+    profile_image = Column(Text, nullable=True)  # Base64 encoded image or URL
+    hobbies = Column(String(50), nullable=True)  # 趣味・特技 (max 50 characters)
+    current_focus = Column(JSON, nullable=True)  # 今、力を入れていること (array of tags)
+
     # Relationships
     google_account = relationship("UserGoogleAccount", back_populates="user", uselist=False)
     audit_logs = relationship("AuditLog", back_populates="user")

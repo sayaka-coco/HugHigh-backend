@@ -19,6 +19,10 @@ class UserResponse(UserBase):
     class_name: Optional[str] = None
     is_active: bool
     created_at: datetime
+    # Profile fields
+    profile_image: Optional[str] = None
+    hobbies: Optional[str] = None
+    current_focus: Optional[list[str]] = None
 
     class Config:
         from_attributes = True
@@ -47,6 +51,13 @@ class UserUpdateRequest(BaseModel):
     role: Optional[int] = None
     class_name: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Schema for user updating their own profile"""
+    profile_image: Optional[str] = None  # Base64 encoded image
+    hobbies: Optional[str] = None  # Max 50 characters
+    current_focus: Optional[list[str]] = None  # Array of focus areas
 
 
 # Login Schemas
@@ -101,14 +112,34 @@ class AuditLogResponse(BaseModel):
 
 
 # Questionnaire Schemas
+class GratitudeTarget(BaseModel):
+    studentId: str
+    studentName: str
+    message: str
+
+
 class QuestionnaireAnswers(BaseModel):
+    # Q1: 計画通りに行動できたか
     q1: int
-    q2: str
-    q3: str  # 'あった' or 'なかった'
-    q3_detail: str
-    q4: str  # 'あった' or 'なかった'
-    q4_detail: str
-    q5: str
+    # Q2: 感謝を伝えたい人
+    q2_hasGratitude: bool
+    q2_gratitudeTargets: Optional[list[GratitudeTarget]] = []
+    # Legacy fields (for backward compatibility)
+    q2_targetStudent: Optional[str] = ""
+    q2_targetStudentId: Optional[str] = ""
+    q2_message: Optional[str] = ""
+    # Q3: インタビュー実施
+    q3_didInterview: bool
+    q3_didConduct: Optional[bool] = False
+    q3_conductContent: Optional[str] = ""
+    q3_couldExtract: Optional[bool] = None
+    q3_extractedInsight: Optional[str] = ""
+    q3_extractionChallenge: Optional[str] = ""
+    q3_didReceive: Optional[bool] = False
+    q3_receiveContent: Optional[str] = ""
+    q3_couldSpeak: Optional[bool] = None
+    q3_speakingInsight: Optional[str] = ""
+    q3_speakingChallenge: Optional[str] = ""
 
 
 class QuestionnaireResponse(BaseModel):
