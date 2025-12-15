@@ -63,3 +63,11 @@ dmypy.json
 *.bak
 *.backup
 *~
+
+# SSL Certificates (CRITICAL - sensitive)
+*.crt.pem
+*.pem
+*.key
+*.crt
+DigiCert*.pem
+SSL_CA_PATH
