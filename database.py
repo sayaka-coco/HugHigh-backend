@@ -8,13 +8,10 @@ import os
 load_dotenv()
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 
-# SSL接続を有効化
-ssl_args = {
-    "ssl": {
-        "ca": os.getenv("SSL_CA_PATH"),
-        "ssl_mode": os.getenv("DATABASE_SSL_MODE", "require")
-    }
-}
+# SSL接続を有効化（Azure MySQL用）
+ssl_args = {}
+if os.getenv("DATABASE_SSL_MODE") == "require":
+    ssl_args = {"ssl": {"ssl_mode": "REQUIRED"}}
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args=ssl_args)
 
